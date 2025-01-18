@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"github.com/mdshahjahanmiah/task-orchestrator/pkg/config"
 	"github.com/mdshahjahanmiah/task-orchestrator/pkg/logger"
 	"github.com/mdshahjahanmiah/task-orchestrator/pkg/redis"
 	"github.com/mdshahjahanmiah/task-orchestrator/pkg/task"
@@ -12,14 +13,16 @@ type Worker struct {
 	ID           string
 	heartbeatTTL time.Duration
 	redisClient  *redis.Client
+	config       *config.Config
 	logger       *logging.Logger
 }
 
 // NewWorker initializes a new worker with a unique ID.
-func NewWorker(id string, redisClient *redis.Client, logger *logging.Logger, heartbeatTTL time.Duration) *Worker {
+func NewWorker(id string, redisClient *redis.Client, config *config.Config, logger *logging.Logger, heartbeatTTL time.Duration) *Worker {
 	return &Worker{
 		ID:           id,
 		redisClient:  redisClient,
+		config:       config,
 		logger:       logger,
 		heartbeatTTL: heartbeatTTL,
 	}
@@ -53,7 +56,7 @@ func (w *Worker) Start(ctx context.Context) {
 			w.redisClient.HSet(ctx, "taskState", taskID, string(task.Running))
 
 			// Execute the task
-			success := w.executeTask(ctx, taskID)
+			success := w.executeTask(ctx, taskID, w.config.SimulatedExecutionTime)
 
 			// Report the result to the orchestrator
 			if success {
@@ -88,9 +91,16 @@ func (w *Worker) sendHeartbeat(ctx context.Context) {
 	}
 }
 
-// executeTask simulates task execution.
-func (w *Worker) executeTask(ctx context.Context, taskID string) bool {
-	w.logger.Info("Executing task", "task_id", taskID)
-	time.Sleep(2 * time.Second)     // Simulated delay
-	return time.Now().Unix()%2 == 0 // Simulated random success/failure
+func (w *Worker) executeTask(ctx context.Context, taskID string, duration int) bool {
+	w.logger.Info("Executing task", "task_id", taskID, "duration", duration)
+
+	select {
+	case <-time.After(time.Duration(duration) * time.Second): // Simulates task execution
+		// Task finished successfully
+		return time.Now().Unix()%2 == 0 // Random success/failure simulation
+	case <-ctx.Done():
+		// Context canceled, exit early
+		w.logger.Warn("Task execution canceled", "task_id", taskID, "reason", ctx.Err())
+		return false
+	}
 }

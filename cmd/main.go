@@ -62,7 +62,7 @@ func main() {
 	go orchestrator.MonitorWorkers(ctx)
 
 	// Start workers
-	startWorkers(ctx, redisClient, logger, 3) // Start 3 workers
+	startWorkers(ctx, redisClient, &conf, logger, 3) // Start 3 workers
 
 	<-ctx.Done()
 	if err := redisClient.Close(); err != nil {
@@ -100,10 +100,10 @@ func submitTestTasks(orchestrator orchestrator.Orchestrator, logger *logging.Log
 }
 
 // startWorkers initializes and starts multiple workers.
-func startWorkers(ctx context.Context, redisClient *redis.Client, logger *logging.Logger, workerCount int) {
+func startWorkers(ctx context.Context, redisClient *redis.Client, config *config.Config, logger *logging.Logger, workerCount int) {
 	for i := 1; i <= workerCount; i++ {
 		workerID := fmt.Sprintf("worker-%d", i)
-		w := worker.NewWorker(workerID, redisClient, logger, 10*time.Second)
+		w := worker.NewWorker(workerID, redisClient, config, logger, 10*time.Second)
 		go w.Start(ctx)
 		logger.Info("Started worker", "worker_id", workerID)
 	}

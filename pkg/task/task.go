@@ -2,7 +2,7 @@ package task
 
 import (
 	"errors"
-	"log"
+	logging "github.com/mdshahjahanmiah/task-orchestrator/pkg/logger"
 	"time"
 )
 
@@ -34,6 +34,12 @@ type Task struct {
 	Payload       Payload `json:"payload"`
 }
 
+var DefaultExecute = func(taskID string, logger *logging.Logger) bool {
+	logger.Info("Executing task", "task_id", taskID)
+	time.Sleep(2 * time.Second) // Simulated task duration
+	return time.Now().Unix()%2 == 0
+}
+
 func (t *Task) Validate() error {
 	if t.ID == "" || t.Group == "" || (t.ExecutionMode != string(Concurrent) && t.ExecutionMode != string(Sequential)) {
 		return errors.New("invalid task: missing required fields or invalid execution mode")
@@ -41,8 +47,6 @@ func (t *Task) Validate() error {
 	return nil
 }
 
-func Execute(taskID string) bool {
-	log.Printf("Executing task: %v", taskID)
-	time.Sleep(2 * time.Second) // Simulated task duration
-	return time.Now().Unix()%2 == 0
+func Execute(taskID string, logger *logging.Logger) bool {
+	return DefaultExecute(taskID, logger)
 }

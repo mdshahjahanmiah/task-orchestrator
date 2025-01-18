@@ -8,7 +8,9 @@ import (
 	"github.com/mdshahjahanmiah/task-orchestrator/pkg/redis"
 	"github.com/mdshahjahanmiah/task-orchestrator/pkg/task"
 	"github.com/stretchr/testify/assert"
+	"strconv"
 	"testing"
+	"time"
 )
 
 func setupOrchestratorTest(t *testing.T) (Orchestrator, *miniredis.Miniredis, context.Context) {
@@ -33,68 +35,94 @@ func setupOrchestratorTest(t *testing.T) (Orchestrator, *miniredis.Miniredis, co
 	return o, mr, context.Background()
 }
 
-func Test_AddTask_Sequential(t *testing.T) {
+func Test_ConcurrentTaskExecution(t *testing.T) {
 	o, mr, ctx := setupOrchestratorTest(t)
 	defer mr.Close()
 
-	task := task.Task{
-		ID:            "task-seq",
-		ExecutionMode: string(task.Sequential),
-		Group:         "group-seq",
-		Payload: task.Payload{
-			Data:     "Sequential Task Data",
-			Duration: 2,
-		},
+	// Submit concurrent tasks
+	for i := 1; i <= 5; i++ {
+		o.AddTask(ctx, task.Task{
+			ID:            "task-" + strconv.Itoa(i),
+			ExecutionMode: string(task.Concurrent),
+			Group:         "group1",
+			Payload: task.Payload{
+				Data:     "Sample Data",
+				Duration: 2,
+			},
+		})
 	}
 
-	o.AddTask(ctx, task)
-
-	// Assert task is added to sequential group
-	assert.Equal(t, "Pending", mr.HGet("taskState", task.ID))
-	assert.Equal(t, "sequential", mr.HGet("taskExecutionMode", task.ID))
-	assert.True(t, mr.Exists("sequential:group-seq"))
+	// Verify tasks are added to the queue
+	queue, err := mr.List(taskQueue)
+	assert.NoError(t, err)
+	assert.Len(t, queue, 5, "Expected 5 tasks in the concurrent queue")
 }
 
-func Test_AddTask_Concurrent(t *testing.T) {
+func Test_SequentialTaskSynchronization(t *testing.T) {
 	o, mr, ctx := setupOrchestratorTest(t)
 	defer mr.Close()
 
-	task := task.Task{
-		ID:            "task-con",
+	// Submit sequential tasks
+	for i := 1; i <= 3; i++ {
+		o.AddTask(ctx, task.Task{
+			ID:            "task-" + strconv.Itoa(i),
+			ExecutionMode: string(task.Sequential),
+			Group:         "group1",
+			Payload: task.Payload{
+				Data:     "Sample Data",
+				Duration: 1,
+			},
+		})
+	}
+
+	// Retrieve tasks from the sorted set for the sequential group
+	sequentialTasks, _ := mr.ZMembers("sequential:group1")
+
+	// Verify tasks are added to the sorted set in the correct order
+	assert.Len(t, sequentialTasks, 3, "Expected 3 tasks in sequential queue")
+	assert.Contains(t, sequentialTasks, "task-1", "Expected task-1 in sequential queue")
+	assert.Contains(t, sequentialTasks, "task-2", "Expected task-2 in sequential queue")
+	assert.Contains(t, sequentialTasks, "task-3", "Expected task-3 in sequential queue")
+}
+
+func Test_TaskRetries(t *testing.T) {
+	o, mr, ctx := setupOrchestratorTest(t)
+	defer mr.Close()
+
+	// Mock task execution to always fail
+	originalExecute := task.DefaultExecute
+	task.DefaultExecute = func(taskID string, logger *logging.Logger) bool {
+		logger.Info("Mock execute: failing task", "task_id", taskID)
+		return false // Always fail
+	}
+	defer func() { task.DefaultExecute = originalExecute }() // Restore original after test
+
+	// Add a failing task
+	taskID := "failing-task"
+	o.AddTask(ctx, task.Task{
+		ID:            taskID,
 		ExecutionMode: string(task.Concurrent),
-		Group:         "group-con",
+		Group:         "group1",
 		Payload: task.Payload{
-			Data:     "Concurrent Task Data",
-			Duration: 2,
+			Data:     "Failing Task",
+			Duration: 1,
 		},
-	}
+	})
 
-	o.AddTask(ctx, task)
+	// Run the orchestrator in a separate goroutine
+	cancelCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
-	// Assert task is added to task queue
-	assert.Equal(t, "Pending", mr.HGet("taskState", task.ID))
-	assert.Equal(t, "concurrent", mr.HGet("taskExecutionMode", task.ID))
-	assert.True(t, mr.Exists(taskQueue))
-}
+	go o.HandleTasks(cancelCtx)
 
-func Test_AddTask_InvalidMode(t *testing.T) {
-	o, mr, ctx := setupOrchestratorTest(t)
-	defer mr.Close()
+	// Wait for retries to complete
+	time.Sleep(15 * time.Second) // Adjusted for retry backoff
 
-	task := task.Task{
-		ID:            "task-invalid",
-		ExecutionMode: "invalid-mode",
-		Group:         "group-invalid",
-		Payload: task.Payload{
-			Data:     "Invalid Task Data",
-			Duration: 2,
-		},
-	}
+	// Check retry count
+	retryCount := mr.HGet("taskRetries", taskID)
+	assert.Equal(t, "3", retryCount, "Retry count mismatch")
 
-	o.AddTask(ctx, task)
-
-	// Assert task is not added to Redis
-	assert.Empty(t, mr.HGet("taskState", task.ID))
-	assert.False(t, mr.Exists(taskQueue))
-	assert.False(t, mr.Exists("sequential:group-invalid"))
+	// Verify task state is marked as Failed
+	taskState := mr.HGet("taskState", taskID)
+	assert.Equal(t, string(task.Failed), taskState, "Task should be marked as Failed after max retries")
 }

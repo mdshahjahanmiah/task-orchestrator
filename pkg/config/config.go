@@ -16,7 +16,7 @@ func Load() (Config, error) {
 	fs := flag.NewFlagSet("", flag.ExitOnError)
 
 	executionMode := fs.String("execution.mode", "sequential", "execution mode e.g., sequential, otherwise default will be concurrent")
-	simulatedExecutionTime := fs.Int("simulated.execution.time", 3, "simulated execution time for task")
+	simulatedExecutionTime := fs.Int("simulated.execution.time", 2, "simulated execution time for task")
 	redisAddress := fs.String("redis.address", "localhost:6379", "Redis address")
 
 	loggerConfig := logging.LoggerConfig{}

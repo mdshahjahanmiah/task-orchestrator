@@ -8,7 +8,7 @@ import (
 	"github.com/mdshahjahanmiah/task-orchestrator/pkg/task"
 	"github.com/redis/go-redis/v9"
 	"math"
-	"sync"
+	"strconv"
 	"time"
 )
 
@@ -26,7 +26,6 @@ type Orchestrator interface {
 }
 
 type orchestrator struct {
-	mu           sync.Mutex
 	heartbeatTTL time.Duration
 	retries      map[string]int
 	config       config.Config
@@ -144,21 +143,23 @@ func (o *orchestrator) releaseGroupLock(ctx context.Context, group string) {
 }
 
 func (o *orchestrator) executeTask(ctx context.Context, taskID, group string) {
-	retryKey := "retryCount:" + taskID
+	retryKey := "taskRetries"
 
 	// Fetch current retry count
-	retryCount, err := o.redisClient.Get(ctx, retryKey).Int()
-	if err != nil && err != redis.Nil {
+	retryCountStr, err := o.redisClient.HGet(ctx, retryKey, taskID).Result()
+	retryCount := 0
+	if err == nil {
+		retryCount, _ = strconv.Atoi(retryCountStr)
+	} else if err != redis.Nil {
 		o.logger.Error("Failed to fetch retry count", "task_id", taskID, "err", err)
 		return
 	}
+
+	// Check if retry count exceeds the limit
 	if retryCount >= retryLimit {
 		o.logger.Warn("Task exceeded retry limit", "retry_count", retryCount, "task_id", taskID)
+		// Mark task as Failed
 		o.redisClient.HSet(ctx, "taskState", taskID, string(task.Failed))
-		// For sequential tasks, release the lock for subsequent tasks
-		if group != "" {
-			o.releaseGroupLock(ctx, group)
-		}
 		return
 	}
 
@@ -166,19 +167,22 @@ func (o *orchestrator) executeTask(ctx context.Context, taskID, group string) {
 	o.redisClient.HSet(ctx, "taskState", taskID, string(task.Running))
 
 	// Simulate task execution
-	success := task.Execute(taskID)
+	success := task.DefaultExecute(taskID, o.logger)
 	if success {
 		o.logger.Info("Task completed successfully", "task_id", taskID)
+		// Mark task as Success and reset retry count
 		o.redisClient.HSet(ctx, "taskState", taskID, string(task.Success))
-		o.redisClient.Del(ctx, retryKey)
+		o.redisClient.HDel(ctx, retryKey, taskID)
 	} else {
-		// Retry logic
+		// Increment retry count and retry the task
 		retryCount++
+		o.redisClient.HSet(ctx, retryKey, taskID, retryCount)
+
 		backoff := time.Duration(math.Pow(2, float64(retryCount))) * time.Second
 		o.logger.Warn("Retrying task", "task_id", taskID, "retry_count", retryCount, "backoff", backoff)
 		time.Sleep(backoff)
 
-		o.redisClient.Set(ctx, retryKey, retryCount, 0)
+		// Requeue task
 		if group != "" {
 			o.redisClient.ZAdd(ctx, "sequential:"+group, redis.Z{
 				Score:  float64(time.Now().UnixNano()),
