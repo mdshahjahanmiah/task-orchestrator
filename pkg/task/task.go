@@ -35,9 +35,6 @@ type Task struct {
 }
 
 func (t *Task) Validate() error {
-	if t.ID == "" || t.Group == "" || t.ExecutionMode == "" {
-		return errors.New("invalid task: missing required fields")
-	}
 	if t.ID == "" || t.Group == "" || (t.ExecutionMode != string(Concurrent) && t.ExecutionMode != string(Sequential)) {
 		return errors.New("invalid task: missing required fields or invalid execution mode")
 	}

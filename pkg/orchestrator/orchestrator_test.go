@@ -3,8 +3,8 @@ package orchestrator
 import (
 	"context"
 	"github.com/alicebob/miniredis/v2"
-	"github.com/mdshahjahanmiah/explore-go/logging"
 	"github.com/mdshahjahanmiah/task-orchestrator/pkg/config"
+	"github.com/mdshahjahanmiah/task-orchestrator/pkg/logger"
 	"github.com/mdshahjahanmiah/task-orchestrator/pkg/redis"
 	"github.com/mdshahjahanmiah/task-orchestrator/pkg/task"
 	"github.com/stretchr/testify/assert"
