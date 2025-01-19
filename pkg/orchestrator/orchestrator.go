@@ -43,6 +43,7 @@ func NewOrchestrator(config config.Config, redisClient *redisClient.Client, logg
 	}
 }
 
+// AddTask adds a task to the appropriate queue based on its execution mode.
 func (o *orchestrator) AddTask(ctx context.Context, t task.Task) {
 	if err := t.Validate(); err != nil {
 		o.logger.Error("Invalid task", "err", err)
@@ -51,84 +52,135 @@ func (o *orchestrator) AddTask(ctx context.Context, t task.Task) {
 
 	switch t.ExecutionMode {
 	case string(task.Sequential):
-		score := time.Now().UnixNano()
-		err := o.redisClient.ZAdd(ctx, "sequential:"+t.Group, redis.Z{
-			Score:  float64(score),
-			Member: t.ID,
-		}).Err()
-		if err != nil {
-			o.logger.Error("Failed to add task to queue", "execution_mode", string(task.Sequential), "task_id", t.ID, "err", err)
-			return
-		}
+		o.addSequentialTask(ctx, t)
 	case string(task.Concurrent):
-		err := o.redisClient.LPush(ctx, taskQueue, t.ID).Err()
-		if err != nil {
-			o.logger.Error("Failed to add task to queue", "execution_mode", string(task.Concurrent), "task_id", t.ID, "err", err)
-			return
-		}
+		o.addConcurrentTask(ctx, t)
 	default:
 		o.logger.Error("Invalid execution mode", "execution_mode", t.ExecutionMode, "task_id", t.ID)
+	}
+}
+
+// HandleTasks is the main entry point for processing tasks. It delegates to concurrent and sequential processing functions.
+func (o *orchestrator) HandleTasks(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			o.logger.Info("Stopping task processing due to context cancellation")
+			return
+		default:
+			o.processConcurrentTasks(ctx)
+			o.processSequentialTasks(ctx)
+		}
+	}
+}
+
+func (o *orchestrator) MonitorWorkers(ctx context.Context) {
+	ticker := time.NewTicker(o.heartbeatTTL / 2)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			workers, err := o.redisClient.HGetAll(ctx, "workerStatus").Result()
+			if err != nil {
+				o.logger.Error("Error fetching worker status", "err", err)
+				continue
+			}
+
+			for workerID, status := range workers {
+				if status != "active" {
+					o.logger.Warn("Worker unresponsive, reassigning tasks", "worker_id", workerID)
+					o.ReassignTasks(ctx, workerID)
+					o.redisClient.HDel(ctx, "workerStatus", workerID)
+				}
+			}
+		}
+	}
+}
+
+func (o *orchestrator) ReassignTasks(ctx context.Context, worker string) {
+	tasks, err := o.redisClient.HGetAll(ctx, "workerTasks:"+worker).Result()
+	if err != nil {
+		o.logger.Error("Error fetching tasks for unresponsive worker", "worker_id", worker, "err", err)
 		return
 	}
 
-	o.redisClient.HSet(ctx, "taskState", t.ID, string(task.Pending))
+	for taskID := range tasks {
+		o.logger.Info("Reassigning task", "task_id", taskID)
+		o.redisClient.LPush(ctx, taskQueue, taskID)
+		o.redisClient.HSet(ctx, "taskState", taskID, string(task.Pending))
+	}
+	o.redisClient.Del(ctx, "workerTasks:"+worker)
+}
+
+func (o *orchestrator) addConcurrentTask(ctx context.Context, t task.Task) {
+	if err := o.redisClient.LPush(ctx, taskQueue, t.ID).Err(); err != nil {
+		o.logger.Error("Failed to add task to concurrent queue", "task_id", t.ID, "err", err)
+		return
+	}
+	o.logTaskState(ctx, t, task.Pending)
+}
+
+func (o *orchestrator) addSequentialTask(ctx context.Context, t task.Task) {
+	score := time.Now().UnixNano()
+	if err := o.redisClient.ZAdd(ctx, "sequential:"+t.Group, redis.Z{
+		Score:  float64(score),
+		Member: t.ID,
+	}).Err(); err != nil {
+		o.logger.Error("Failed to add task to sequential queue", "task_id", t.ID, "err", err)
+		return
+	}
+	o.logTaskState(ctx, t, task.Pending)
+}
+
+func (o *orchestrator) logTaskState(ctx context.Context, t task.Task, state task.State) {
+	o.redisClient.HSet(ctx, "taskState", t.ID, string(state))
 	o.redisClient.HSet(ctx, "taskGroup", t.ID, t.Group)
 	o.redisClient.HSet(ctx, "taskExecutionMode", t.ID, string(t.ExecutionMode))
 }
 
-func (o *orchestrator) HandleTasks(ctx context.Context) {
-	for {
-		// Process concurrent tasks
-		result, err := o.redisClient.BRPop(ctx, 0, taskQueue).Result()
-		if err != nil {
-			o.logger.Error("Error fetching task from concurrent queue", "err", err)
+func (o *orchestrator) processConcurrentTasks(ctx context.Context) {
+	result, err := o.redisClient.BRPop(ctx, 0, taskQueue).Result()
+	if err != nil {
+		o.logger.Error("Error fetching task from concurrent queue", "err", err)
+		return
+	}
+
+	taskID := result[1]
+	o.logger.Info("Processing concurrent task", "task_id", taskID)
+
+	go o.executeTask(ctx, taskID, "", o.config.SimulatedExecutionTime)
+}
+
+func (o *orchestrator) processSequentialTasks(ctx context.Context) {
+	groups, err := o.redisClient.Keys(ctx, "sequential:*").Result()
+	if err != nil {
+		o.logger.Error("Error fetching sequential groups", "err", err)
+		return
+	}
+
+	for _, groupKey := range groups {
+		if !o.acquireGroupLock(ctx, groupKey) {
+			o.logger.Debug("Lock not acquired for sequential group", "group", groupKey)
 			continue
 		}
+		o.logger.Info("Lock acquired for sequential group", "group", groupKey)
 
-		taskID := result[1]
-		executionMode, err := o.redisClient.HGet(ctx, "taskExecutionMode", taskID).Result()
-		if err != nil {
-			o.logger.Error("Error fetching execution mode for task", "task_id", taskID, "err", err)
-			continue
-		}
-		o.logger.Info("Processing concurrent task", "execution_mode", executionMode, "task_id", taskID)
-
-		// Execute concurrent task
-		go o.executeTask(ctx, taskID, "", o.config.SimulatedExecutionTime)
-
-		// Process sequential tasks
-		groups, err := o.redisClient.Keys(ctx, "sequential:*").Result()
-		if err != nil {
-			o.logger.Error("Error fetching sequential groups", "err", err)
-			continue
-		}
-
-		for _, groupKey := range groups {
-			// Acquire lock for the group
-			if !o.acquireGroupLock(ctx, groupKey) {
-				o.logger.Debug("Lock not acquired for sequential group", "group", groupKey)
-				continue
-			}
-			o.logger.Info("Lock acquired for sequential group", "group", groupKey)
-
-			// Fetch the next task
-			taskResult, err := o.redisClient.ZPopMin(ctx, groupKey).Result()
-			if err != nil || len(taskResult) == 0 {
-				o.logger.Info("No task in sequential group", "group", groupKey)
-				o.releaseGroupLock(ctx, groupKey)
-				continue
-			}
-
-			taskID := taskResult[0].Member.(string)
-			o.logger.Info("Processing sequential task", "task_id", taskID, "group", groupKey)
-
-			// Execute task
-			o.executeTask(ctx, taskID, groupKey, o.config.SimulatedExecutionTime)
-
-			// Release lock
+		taskResult, err := o.redisClient.ZPopMin(ctx, groupKey).Result()
+		if err != nil || len(taskResult) == 0 {
+			o.logger.Info("No task in sequential group", "group", groupKey)
 			o.releaseGroupLock(ctx, groupKey)
-			o.logger.Info("Lock released for sequential group", "group", groupKey)
+			continue
 		}
+
+		taskID := taskResult[0].Member.(string)
+		o.logger.Info("Processing sequential task", "task_id", taskID, "group", groupKey)
+
+		o.executeTask(ctx, taskID, groupKey, o.config.SimulatedExecutionTime)
+		o.releaseGroupLock(ctx, groupKey)
+		o.logger.Info("Lock released for sequential group", "group", groupKey)
 	}
 }
 
@@ -193,45 +245,4 @@ func (o *orchestrator) executeTask(ctx context.Context, taskID, group string, si
 		}
 		o.redisClient.HSet(ctx, "taskState", taskID, string(task.Pending))
 	}
-}
-
-func (o *orchestrator) MonitorWorkers(ctx context.Context) {
-	ticker := time.NewTicker(o.heartbeatTTL / 2)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			workers, err := o.redisClient.HGetAll(ctx, "workerStatus").Result()
-			if err != nil {
-				o.logger.Error("Error fetching worker status", "err", err)
-				continue
-			}
-
-			for workerID, status := range workers {
-				if status != "active" {
-					o.logger.Warn("Worker unresponsive, reassigning tasks", "worker_id", workerID)
-					o.ReassignTasks(ctx, workerID)
-					o.redisClient.HDel(ctx, "workerStatus", workerID)
-				}
-			}
-		}
-	}
-}
-
-func (o *orchestrator) ReassignTasks(ctx context.Context, worker string) {
-	tasks, err := o.redisClient.HGetAll(ctx, "workerTasks:"+worker).Result()
-	if err != nil {
-		o.logger.Error("Error fetching tasks for unresponsive worker", "worker_id", worker, "err", err)
-		return
-	}
-
-	for taskID := range tasks {
-		o.logger.Info("Reassigning task", "task_id", taskID)
-		o.redisClient.LPush(ctx, taskQueue, taskID)
-		o.redisClient.HSet(ctx, "taskState", taskID, string(task.Pending))
-	}
-	o.redisClient.Del(ctx, "workerTasks:"+worker)
 }

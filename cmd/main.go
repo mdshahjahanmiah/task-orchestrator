@@ -2,19 +2,15 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"log/slog"
-	"os"
-	"os/signal"
-	"syscall"
-	"time"
-
 	"github.com/mdshahjahanmiah/task-orchestrator/pkg/config"
 	"github.com/mdshahjahanmiah/task-orchestrator/pkg/logger"
 	"github.com/mdshahjahanmiah/task-orchestrator/pkg/orchestrator"
 	"github.com/mdshahjahanmiah/task-orchestrator/pkg/redis"
-	"github.com/mdshahjahanmiah/task-orchestrator/pkg/task"
-	"github.com/mdshahjahanmiah/task-orchestrator/pkg/worker"
+	"github.com/mdshahjahanmiah/task-orchestrator/pkg/utils"
+	"log/slog"
+	"os"
+	"os/signal"
+	"syscall"
 )
 
 func main() {
@@ -42,7 +38,7 @@ func main() {
 	}
 
 	// Submit 10 tasks
-	submitTestTasks(orchestrator, logger)
+	utils.SubmitTestTasks(orchestrator, logger)
 
 	// Setup context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -62,49 +58,11 @@ func main() {
 	go orchestrator.MonitorWorkers(ctx)
 
 	// Start workers
-	startWorkers(ctx, redisClient, &conf, logger, 3) // Start 3 workers
+	utils.StartWorkers(ctx, redisClient, &conf, logger, conf.WorkerCount)
 
 	<-ctx.Done()
 	if err := redisClient.Close(); err != nil {
 		logger.Fatal("Failed to shut down Redis client", "err", err)
 	}
 	logger.Info("Service shutdown completed")
-}
-
-// submitTestTasks submits sample tasks to the orchestrator.
-func submitTestTasks(orchestrator orchestrator.Orchestrator, logger *logging.Logger) {
-	ctx := context.Background()
-
-	for i := 1; i <= 10; i++ {
-		executionMode := string(task.Concurrent)
-		group := "group1"
-
-		if i%2 == 0 {
-			executionMode = string(task.Sequential)
-			group = "group2"
-		}
-
-		task := task.Task{
-			ID:            fmt.Sprintf("task-%d", i),
-			ExecutionMode: executionMode,
-			Group:         group,
-			Payload: task.Payload{
-				Data:     fmt.Sprintf("Task Data %d", i),
-				Duration: 2,
-			},
-		}
-
-		orchestrator.AddTask(ctx, task)
-		logger.Info("Submitted task", "mode", task.ExecutionMode, "group", task.Group, "task_id", task.ID)
-	}
-}
-
-// startWorkers initializes and starts multiple workers.
-func startWorkers(ctx context.Context, redisClient *redis.Client, config *config.Config, logger *logging.Logger, workerCount int) {
-	for i := 1; i <= workerCount; i++ {
-		workerID := fmt.Sprintf("worker-%d", i)
-		w := worker.NewWorker(workerID, redisClient, config, logger, 10*time.Second)
-		go w.Start(ctx)
-		logger.Info("Started worker", "worker_id", workerID)
-	}
 }
