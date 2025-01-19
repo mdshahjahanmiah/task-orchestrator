@@ -2,13 +2,12 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"github.com/mdshahjahanmiah/explore-go/logging"
 	"github.com/mdshahjahanmiah/task-orchestrator/pkg/config"
+	"github.com/mdshahjahanmiah/task-orchestrator/pkg/logger"
 	"github.com/mdshahjahanmiah/task-orchestrator/pkg/orchestrator"
 	"github.com/mdshahjahanmiah/task-orchestrator/pkg/redis"
-	"github.com/mdshahjahanmiah/task-orchestrator/pkg/task"
-	"log"
+	"github.com/mdshahjahanmiah/task-orchestrator/pkg/utils"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -17,23 +16,33 @@ import (
 func main() {
 	conf, err := config.Load()
 	if err != nil {
-		log.Printf("Failed to load configuration: %v\n", err)
+		slog.Info("Failed to load configuration", "err", err)
 		return
 	}
-	log.Println("Configuration loaded successfully")
+	slog.Info("Configuration loaded successfully")
 
 	logger, err := logging.NewLogger(conf.LoggerConfig)
 	if err != nil {
-		log.Printf("Failed to initialize logger: %v\n", err)
+		slog.Info("Failed to initialize logger", "err", err)
 		return
 	}
-	log.Println("Logger initialized successfully")
+	logger.Info("Logger initialized successfully")
 
 	redisClient := redis.NewClient(conf)
+	if _, err := redisClient.Ping(context.Background()).Result(); err != nil {
+		logger.Fatal("Failed to connect to Redis", "err", err)
+	}
 	orchestrator := orchestrator.NewOrchestrator(conf, redisClient, logger)
+	if orchestrator == nil {
+		logger.Fatal("Failed to initialize orchestrator")
+	}
+
+	// Clear Redis keys for a clean state
+	utils.ClearRedisKeys(redisClient, "taskState", "taskRetries")
+	logger.Info("Redis keys cleared")
 
 	// Submit 10 tasks
-	submitTestTasks(orchestrator, logger)
+	utils.SubmitTestTasks(orchestrator, logger)
 
 	// Setup context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -44,41 +53,20 @@ func main() {
 	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-signalChan
-		log.Println("Received shutdown signal. Cleaning up...")
+		logger.Info("Received shutdown signal. Cleaning up...")
 		cancel()
 	}()
 
-	// Start orchestrator and workers
+	// Start orchestrator
 	go orchestrator.HandleTasks(ctx)
 	go orchestrator.MonitorWorkers(ctx)
 
+	// Start workers
+	utils.StartWorkers(ctx, redisClient, &conf, logger, conf.WorkerCount) // Start 3 workers
+
 	<-ctx.Done()
-	log.Println("Service shutdown completed")
-}
-
-func submitTestTasks(orchestrator orchestrator.Orchestrator, logger *logging.Logger) {
-	ctx := context.Background()
-
-	for i := 1; i <= 10; i++ {
-		executionMode := "concurrent"
-		group := "group1"
-
-		if i%2 == 0 {
-			executionMode = "sequential"
-			group = "group2"
-		}
-
-		task := task.Task{
-			ID:            fmt.Sprintf("task-%d", i),
-			ExecutionMode: executionMode,
-			Group:         group,
-			Payload: task.Payload{
-				Data:     fmt.Sprintf("Task Data %d", i),
-				Duration: 2,
-			},
-		}
-
-		orchestrator.AddTask(ctx, task)
-		logger.Info("Submitted task", "mode", task.ExecutionMode, "group", task.Group, "task_id", task.ID)
+	if err := redisClient.Close(); err != nil {
+		logger.Fatal("Failed to shut down Redis client", "err", err)
 	}
+	logger.Info("Service shutdown completed")
 }
