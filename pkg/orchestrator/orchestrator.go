@@ -43,6 +43,7 @@ func NewOrchestrator(config config.Config, redisClient *redisClient.Client, logg
 	}
 }
 
+// AddTask adds a task to the appropriate queue based on its execution mode.
 func (o *orchestrator) AddTask(ctx context.Context, t task.Task) {
 	if err := t.Validate(); err != nil {
 		o.logger.Error("Invalid task", "err", err)
@@ -51,147 +52,29 @@ func (o *orchestrator) AddTask(ctx context.Context, t task.Task) {
 
 	switch t.ExecutionMode {
 	case string(task.Sequential):
-		score := time.Now().UnixNano()
-		err := o.redisClient.ZAdd(ctx, "sequential:"+t.Group, redis.Z{
-			Score:  float64(score),
-			Member: t.ID,
-		}).Err()
-		if err != nil {
-			o.logger.Error("Failed to add task to queue", "execution_mode", string(task.Sequential), "task_id", t.ID, "err", err)
-			return
-		}
+		o.addSequentialTask(ctx, t)
 	case string(task.Concurrent):
-		err := o.redisClient.LPush(ctx, taskQueue, t.ID).Err()
-		if err != nil {
-			o.logger.Error("Failed to add task to queue", "execution_mode", string(task.Concurrent), "task_id", t.ID, "err", err)
-			return
-		}
+		o.addConcurrentTask(ctx, t)
 	default:
 		o.logger.Error("Invalid execution mode", "execution_mode", t.ExecutionMode, "task_id", t.ID)
-		return
 	}
-
-	o.redisClient.HSet(ctx, "taskState", t.ID, string(task.Pending))
-	o.redisClient.HSet(ctx, "taskGroup", t.ID, t.Group)
-	o.redisClient.HSet(ctx, "taskExecutionMode", t.ID, string(t.ExecutionMode))
 }
 
+// HandleTasks is the main entry point for processing tasks. It delegates to concurrent and sequential processing functions.
 func (o *orchestrator) HandleTasks(ctx context.Context) {
+	o.logger.Debug("Starting to handle tasks...")
 	for {
-		// Process concurrent tasks
-		result, err := o.redisClient.BRPop(ctx, 0, taskQueue).Result()
-		if err != nil {
-			o.logger.Error("Error fetching task from concurrent queue", "err", err)
-			continue
+		select {
+		case <-ctx.Done():
+			o.logger.Info("Stopping task processing due to context cancellation")
+			return
+		default:
+			o.logger.Debug("Fetching concurrent tasks...")
+			o.processConcurrentTasks(ctx)
+
+			o.logger.Debug("Fetching sequential tasks...")
+			o.processSequentialTasks(ctx)
 		}
-
-		taskID := result[1]
-		executionMode, err := o.redisClient.HGet(ctx, "taskExecutionMode", taskID).Result()
-		if err != nil {
-			o.logger.Error("Error fetching execution mode for task", "task_id", taskID, "err", err)
-			continue
-		}
-		o.logger.Info("Processing concurrent task", "execution_mode", executionMode, "task_id", taskID)
-
-		// Execute concurrent task
-		go o.executeTask(ctx, taskID, "")
-
-		// Process sequential tasks
-		groups, err := o.redisClient.Keys(ctx, "sequential:*").Result()
-		if err != nil {
-			o.logger.Error("Error fetching sequential groups", "err", err)
-			continue
-		}
-
-		for _, groupKey := range groups {
-			// Acquire lock for the group
-			if !o.acquireGroupLock(ctx, groupKey) {
-				o.logger.Debug("Lock not acquired for sequential group", "group", groupKey)
-				continue
-			}
-			o.logger.Info("Lock acquired for sequential group", "group", groupKey)
-
-			// Fetch the next task
-			taskResult, err := o.redisClient.ZPopMin(ctx, groupKey).Result()
-			if err != nil || len(taskResult) == 0 {
-				o.logger.Info("No task in sequential group", "group", groupKey)
-				o.releaseGroupLock(ctx, groupKey)
-				continue
-			}
-
-			taskID := taskResult[0].Member.(string)
-			o.logger.Info("Processing sequential task", "task_id", taskID, "group", groupKey)
-
-			// Execute task
-			o.executeTask(ctx, taskID, groupKey)
-
-			// Release lock
-			o.releaseGroupLock(ctx, groupKey)
-			o.logger.Info("Lock released for sequential group", "group", groupKey)
-		}
-	}
-}
-
-func (o *orchestrator) acquireGroupLock(ctx context.Context, group string) bool {
-	locked := o.redisClient.SetNX(ctx, "groupLock:"+group, "locked", o.heartbeatTTL).Val()
-	o.logger.Debug("Attempting to acquire group lock", "group", group, "locked", locked)
-	return locked
-}
-
-func (o *orchestrator) releaseGroupLock(ctx context.Context, group string) {
-	o.redisClient.Del(ctx, "groupLock:"+group)
-}
-
-func (o *orchestrator) executeTask(ctx context.Context, taskID, group string) {
-	retryKey := "taskRetries"
-
-	// Fetch current retry count
-	retryCountStr, err := o.redisClient.HGet(ctx, retryKey, taskID).Result()
-	retryCount := 0
-	if err == nil {
-		retryCount, _ = strconv.Atoi(retryCountStr)
-	} else if err != redis.Nil {
-		o.logger.Error("Failed to fetch retry count", "task_id", taskID, "err", err)
-		return
-	}
-
-	// Check if retry count exceeds the limit
-	if retryCount >= retryLimit {
-		o.logger.Warn("Task exceeded retry limit", "retry_count", retryCount, "task_id", taskID)
-		// Mark task as Failed
-		o.redisClient.HSet(ctx, "taskState", taskID, string(task.Failed))
-		return
-	}
-
-	// Mark task as Running
-	o.redisClient.HSet(ctx, "taskState", taskID, string(task.Running))
-
-	// Simulate task execution
-	success := task.DefaultExecute(taskID, o.logger)
-	if success {
-		o.logger.Info("Task completed successfully", "task_id", taskID)
-		// Mark task as Success and reset retry count
-		o.redisClient.HSet(ctx, "taskState", taskID, string(task.Success))
-		o.redisClient.HDel(ctx, retryKey, taskID)
-	} else {
-		// Increment retry count and retry the task
-		retryCount++
-		o.redisClient.HSet(ctx, retryKey, taskID, retryCount)
-
-		backoff := time.Duration(math.Pow(2, float64(retryCount))) * time.Second
-		o.logger.Warn("Retrying task", "task_id", taskID, "retry_count", retryCount, "backoff", backoff)
-		time.Sleep(backoff)
-
-		// Requeue task
-		if group != "" {
-			o.redisClient.ZAdd(ctx, "sequential:"+group, redis.Z{
-				Score:  float64(time.Now().UnixNano()),
-				Member: taskID,
-			})
-		} else {
-			o.redisClient.LPush(ctx, taskQueue, taskID)
-		}
-		o.redisClient.HSet(ctx, "taskState", taskID, string(task.Pending))
 	}
 }
 
@@ -234,4 +117,136 @@ func (o *orchestrator) ReassignTasks(ctx context.Context, worker string) {
 		o.redisClient.HSet(ctx, "taskState", taskID, string(task.Pending))
 	}
 	o.redisClient.Del(ctx, "workerTasks:"+worker)
+}
+
+func (o *orchestrator) addConcurrentTask(ctx context.Context, t task.Task) {
+	if err := o.redisClient.LPush(ctx, taskQueue, t.ID).Err(); err != nil {
+		o.logger.Error("Failed to add task to concurrent queue", "task_id", t.ID, "err", err)
+		return
+	}
+	o.logTaskState(ctx, t, task.Pending)
+}
+
+func (o *orchestrator) addSequentialTask(ctx context.Context, t task.Task) {
+	score := time.Now().UnixNano()
+	if err := o.redisClient.ZAdd(ctx, "sequential:"+t.Group, redis.Z{
+		Score:  float64(score),
+		Member: t.ID,
+	}).Err(); err != nil {
+		o.logger.Error("Failed to add task to sequential queue", "task_id", t.ID, "err", err)
+		return
+	}
+	o.logTaskState(ctx, t, task.Pending)
+}
+
+func (o *orchestrator) logTaskState(ctx context.Context, t task.Task, state task.State) {
+	o.redisClient.HSet(ctx, "taskState", t.ID, string(state))
+	o.redisClient.HSet(ctx, "taskGroup", t.ID, t.Group)
+	o.redisClient.HSet(ctx, "taskExecutionMode", t.ID, string(t.ExecutionMode))
+}
+
+func (o *orchestrator) processConcurrentTasks(ctx context.Context) {
+	result, err := o.redisClient.BRPop(ctx, 0, taskQueue).Result()
+	if err != nil {
+		o.logger.Error("Error fetching task from concurrent queue", "err", err)
+		return
+	}
+
+	taskID := result[1]
+	o.logger.Info("Processing concurrent task", "task_id", taskID)
+
+	go o.executeTask(ctx, taskID, "", o.config.SimulatedExecutionTime)
+}
+
+func (o *orchestrator) processSequentialTasks(ctx context.Context) {
+	groups, err := o.redisClient.Keys(ctx, "sequential:*").Result()
+	if err != nil {
+		o.logger.Error("Error fetching sequential groups", "err", err)
+		return
+	}
+
+	for _, groupKey := range groups {
+		if !o.acquireGroupLock(ctx, groupKey) {
+			o.logger.Debug("Lock not acquired for sequential group", "group", groupKey)
+			continue
+		}
+		o.logger.Info("Lock acquired for sequential group", "group", groupKey)
+
+		taskResult, err := o.redisClient.ZPopMin(ctx, groupKey).Result()
+		if err != nil || len(taskResult) == 0 {
+			o.logger.Info("No task in sequential group", "group", groupKey)
+			o.releaseGroupLock(ctx, groupKey)
+			continue
+		}
+
+		taskID := taskResult[0].Member.(string)
+		o.logger.Info("Processing sequential task", "task_id", taskID, "group", groupKey)
+
+		o.executeTask(ctx, taskID, groupKey, o.config.SimulatedExecutionTime)
+		o.releaseGroupLock(ctx, groupKey)
+		o.logger.Info("Lock released for sequential group", "group", groupKey)
+	}
+}
+
+func (o *orchestrator) acquireGroupLock(ctx context.Context, group string) bool {
+	locked := o.redisClient.SetNX(ctx, "groupLock:"+group, "locked", o.heartbeatTTL).Val()
+	o.logger.Debug("Attempting to acquire group lock", "group", group, "locked", locked)
+	return locked
+}
+
+func (o *orchestrator) releaseGroupLock(ctx context.Context, group string) {
+	o.redisClient.Del(ctx, "groupLock:"+group)
+}
+
+func (o *orchestrator) executeTask(ctx context.Context, taskID, group string, simulatedExecutionTime int) {
+	retryKey := "taskRetries"
+
+	// Fetch current retry count
+	retryCountStr, err := o.redisClient.HGet(ctx, retryKey, taskID).Result()
+	retryCount := 0
+	if err == nil {
+		retryCount, _ = strconv.Atoi(retryCountStr)
+	} else if err != redis.Nil {
+		o.logger.Error("Failed to fetch retry count", "task_id", taskID, "err", err)
+		return
+	}
+
+	// Check if retry count exceeds the limit
+	if retryCount >= retryLimit {
+		o.logger.Warn("Task exceeded retry limit", "retry_count", retryCount, "task_id", taskID)
+		// Mark task as Failed
+		o.redisClient.HSet(ctx, "taskState", taskID, string(task.Failed))
+		return
+	}
+
+	// Mark task as Running
+	o.redisClient.HSet(ctx, "taskState", taskID, string(task.Running))
+
+	// Simulate task execution
+	success := task.DefaultExecute(taskID, o.logger, simulatedExecutionTime)
+	if success {
+		o.logger.Info("Task completed successfully", "task_id", taskID)
+		// Mark task as Success and reset retry count
+		o.redisClient.HSet(ctx, "taskState", taskID, string(task.Success))
+		o.redisClient.HDel(ctx, retryKey, taskID)
+	} else {
+		// Increment retry count and retry the task
+		retryCount++
+		o.redisClient.HSet(ctx, retryKey, taskID, retryCount)
+
+		backoff := time.Duration(math.Pow(2, float64(retryCount))) * time.Second
+		o.logger.Warn("Retrying task", "task_id", taskID, "retry_count", retryCount, "backoff", backoff)
+		time.Sleep(backoff)
+
+		// Requeue task
+		if group != "" {
+			o.redisClient.ZAdd(ctx, "sequential:"+group, redis.Z{
+				Score:  float64(time.Now().UnixNano()),
+				Member: taskID,
+			})
+		} else {
+			o.redisClient.LPush(ctx, taskQueue, taskID)
+		}
+		o.redisClient.HSet(ctx, "taskState", taskID, string(task.Pending))
+	}
 }

@@ -34,9 +34,9 @@ type Task struct {
 	Payload       Payload `json:"payload"`
 }
 
-var DefaultExecute = func(taskID string, logger *logging.Logger) bool {
+var DefaultExecute = func(taskID string, logger *logging.Logger, simulatedExecutionTime int) bool {
 	logger.Info("Executing task", "task_id", taskID)
-	time.Sleep(2 * time.Second) // Simulated task duration
+	time.Sleep(time.Duration(simulatedExecutionTime) * time.Second) // Simulated task duration
 	return time.Now().Unix()%2 == 0
 }
 
@@ -47,6 +47,6 @@ func (t *Task) Validate() error {
 	return nil
 }
 
-func Execute(taskID string, logger *logging.Logger) bool {
-	return DefaultExecute(taskID, logger)
+func Execute(taskID string, logger *logging.Logger, simulatedExecutionTime int) bool {
+	return DefaultExecute(taskID, logger, simulatedExecutionTime)
 }

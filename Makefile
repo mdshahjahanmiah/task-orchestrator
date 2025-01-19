@@ -33,13 +33,3 @@ lint:
 clean:
 	@echo "Cleaning up..."
 	@rm -f $(COVERAGE_FILE) coverage.html
-
-# Display help
-help:
-	@echo "Available targets:"
-	@echo "  all        Run tests and generate coverage report"
-	@echo "  test       Run tests only"
-	@echo "  coverage   Run tests with coverage and generate reports"
-	@echo "  lint       Run code linting (requires golangci-lint)"
-	@echo "  clean      Clean up generated files"
-	@echo "  help       Display this help message"

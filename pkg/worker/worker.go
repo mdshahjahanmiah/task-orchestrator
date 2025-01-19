@@ -29,6 +29,7 @@ func NewWorker(id string, redisClient *redis.Client, config *config.Config, logg
 }
 
 func (w *Worker) Start(ctx context.Context) {
+	w.logger.Info("Worker started", "worker_id", w.ID)
 	go w.sendHeartbeat(ctx)
 
 	for {
@@ -37,6 +38,8 @@ func (w *Worker) Start(ctx context.Context) {
 			w.logger.Info("Worker stopped due to context cancellation", "worker_id", w.ID)
 			return
 		default:
+			w.logger.Debug("Worker waiting for task...", "worker_id", w.ID)
+
 			// Pull task from the queue
 			result, err := w.redisClient.BRPop(ctx, 0, "taskQueue").Result()
 			if err != nil {

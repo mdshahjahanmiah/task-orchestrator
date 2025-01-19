@@ -91,7 +91,7 @@ func Test_TaskRetries(t *testing.T) {
 
 	// Mock task execution to always fail
 	originalExecute := task.DefaultExecute
-	task.DefaultExecute = func(taskID string, logger *logging.Logger) bool {
+	task.DefaultExecute = func(taskID string, logger *logging.Logger, simulatedExecutionTime int) bool {
 		logger.Info("Mock execute: failing task", "task_id", taskID)
 		return false // Always fail
 	}
