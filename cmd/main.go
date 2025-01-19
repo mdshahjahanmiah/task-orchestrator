@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -20,17 +20,17 @@ import (
 func main() {
 	conf, err := config.Load()
 	if err != nil {
-		log.Printf("Failed to load configuration: %v\n", err)
+		slog.Info("Failed to load configuration", "err", err)
 		return
 	}
-	log.Println("Configuration loaded successfully")
+	slog.Info("Configuration loaded successfully")
 
 	logger, err := logging.NewLogger(conf.LoggerConfig)
 	if err != nil {
-		log.Printf("Failed to initialize logger: %v\n", err)
+		slog.Info("Failed to initialize logger", "err", err)
 		return
 	}
-	log.Println("Logger initialized successfully")
+	logger.Info("Logger initialized successfully")
 
 	redisClient := redis.NewClient(conf)
 	if _, err := redisClient.Ping(context.Background()).Result(); err != nil {
@@ -53,7 +53,7 @@ func main() {
 	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-signalChan
-		log.Println("Received shutdown signal. Cleaning up...")
+		logger.Info("Received shutdown signal. Cleaning up...")
 		cancel()
 	}()
 

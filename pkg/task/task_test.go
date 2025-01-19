@@ -75,13 +75,13 @@ func Test_TaskExecution(t *testing.T) {
 		CommandHandler: "text",
 		AddSource:      false,
 	}
-	log, err := logging.NewLogger(logConfig)
+	logger, err := logging.NewLogger(logConfig)
 	assert.NoError(t, err, "Logger initialization should not fail")
 
 	// Simulated task execution
 	taskID := "test-task"
 	start := time.Now()
-	success := Execute(taskID, log)
+	success := Execute(taskID, logger, 2)
 
 	// Assert execution results
 	duration := time.Since(start)

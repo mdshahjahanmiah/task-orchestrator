@@ -21,7 +21,7 @@ func Load() (Config, error) {
 
 	loggerConfig := logging.LoggerConfig{}
 	fs.StringVar(&loggerConfig.CommandHandler, "logger.handler.type", "json", "handler type e.g., json, otherwise default will be text type")
-	fs.StringVar(&loggerConfig.LogLevel, "logger.log.level", "INFO", "log level (INFO, DEBUG, etc.)")
+	fs.StringVar(&loggerConfig.LogLevel, "logger.log.level", "DEBUG", "log level (INFO, DEBUG, etc.)")
 
 	// Parse the command-line flags
 	err := fs.Parse(flag.Args())

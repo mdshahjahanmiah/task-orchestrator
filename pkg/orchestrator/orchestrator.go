@@ -94,7 +94,7 @@ func (o *orchestrator) HandleTasks(ctx context.Context) {
 		o.logger.Info("Processing concurrent task", "execution_mode", executionMode, "task_id", taskID)
 
 		// Execute concurrent task
-		go o.executeTask(ctx, taskID, "")
+		go o.executeTask(ctx, taskID, "", o.config.SimulatedExecutionTime)
 
 		// Process sequential tasks
 		groups, err := o.redisClient.Keys(ctx, "sequential:*").Result()
@@ -123,7 +123,7 @@ func (o *orchestrator) HandleTasks(ctx context.Context) {
 			o.logger.Info("Processing sequential task", "task_id", taskID, "group", groupKey)
 
 			// Execute task
-			o.executeTask(ctx, taskID, groupKey)
+			o.executeTask(ctx, taskID, groupKey, o.config.SimulatedExecutionTime)
 
 			// Release lock
 			o.releaseGroupLock(ctx, groupKey)
@@ -142,7 +142,7 @@ func (o *orchestrator) releaseGroupLock(ctx context.Context, group string) {
 	o.redisClient.Del(ctx, "groupLock:"+group)
 }
 
-func (o *orchestrator) executeTask(ctx context.Context, taskID, group string) {
+func (o *orchestrator) executeTask(ctx context.Context, taskID, group string, simulatedExecutionTime int) {
 	retryKey := "taskRetries"
 
 	// Fetch current retry count
@@ -167,7 +167,7 @@ func (o *orchestrator) executeTask(ctx context.Context, taskID, group string) {
 	o.redisClient.HSet(ctx, "taskState", taskID, string(task.Running))
 
 	// Simulate task execution
-	success := task.DefaultExecute(taskID, o.logger)
+	success := task.DefaultExecute(taskID, o.logger, simulatedExecutionTime)
 	if success {
 		o.logger.Info("Task completed successfully", "task_id", taskID)
 		// Mark task as Success and reset retry count
