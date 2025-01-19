@@ -9,6 +9,8 @@ type Config struct {
 	ExecutionMode          string
 	SimulatedExecutionTime int
 	WorkerCount            int
+	SuccessRate            int
+	RetryLimit             int
 	RedisAddress           string
 	LoggerConfig           logging.LoggerConfig
 }
@@ -17,9 +19,11 @@ func Load() (Config, error) {
 	fs := flag.NewFlagSet("", flag.ExitOnError)
 
 	executionMode := fs.String("execution.mode", "sequential", "execution mode e.g., sequential, otherwise default will be concurrent")
-	simulatedExecutionTime := fs.Int("simulated.execution.time", 5, "simulated execution time for task")
+	simulatedExecutionTime := fs.Int("simulated.execution.time", 3, "simulated execution time for task")
 	redisAddress := fs.String("redis.address", "localhost:6379", "Redis address")
-	workerCount := fs.Int("worker.count", 5, "number of workers")
+	workerCount := fs.Int("worker.count", 1, "number of workers")
+	successRate := fs.Int("success.rate", 80, "success rate of task completion")
+	retryLimit := fs.Int("retry.limit", 3, "retry limit for task completion")
 
 	loggerConfig := logging.LoggerConfig{}
 	fs.StringVar(&loggerConfig.CommandHandler, "logger.handler.type", "json", "handler type e.g., json, otherwise default will be text type")
@@ -35,6 +39,8 @@ func Load() (Config, error) {
 		ExecutionMode:          *executionMode,
 		SimulatedExecutionTime: *simulatedExecutionTime,
 		WorkerCount:            *workerCount,
+		SuccessRate:            *successRate,
+		RetryLimit:             *retryLimit,
 		RedisAddress:           *redisAddress,
 		LoggerConfig:           loggerConfig,
 	}

@@ -62,7 +62,7 @@ func main() {
 	go orchestrator.MonitorWorkers(ctx)
 
 	// Start workers
-	utils.StartWorkers(ctx, redisClient, &conf, logger, conf.WorkerCount) // Start 3 workers
+	utils.StartWorkers(ctx, redisClient, &conf, logger, conf.WorkerCount)
 
 	<-ctx.Done()
 	if err := redisClient.Close(); err != nil {

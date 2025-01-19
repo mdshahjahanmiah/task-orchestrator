@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"github.com/mdshahjahanmiah/task-orchestrator/pkg/config"
 	"github.com/mdshahjahanmiah/task-orchestrator/pkg/logger"
 	redisClient "github.com/mdshahjahanmiah/task-orchestrator/pkg/redis"
@@ -200,53 +201,76 @@ func (o *orchestrator) releaseGroupLock(ctx context.Context, group string) {
 
 func (o *orchestrator) executeTask(ctx context.Context, taskID, group string, simulatedExecutionTime int) {
 	retryKey := "taskRetries"
-
-	// Fetch current retry count
-	retryCountStr, err := o.redisClient.HGet(ctx, retryKey, taskID).Result()
-	retryCount := 0
-	if err == nil {
-		retryCount, _ = strconv.Atoi(retryCountStr)
-	} else if err != redis.Nil {
-		o.logger.Error("Failed to fetch retry count", "task_id", taskID, "err", err)
-		return
-	}
+	retryCount := o.getRetryCount(ctx, retryKey, taskID)
 
 	// Check if retry count exceeds the limit
 	if retryCount >= retryLimit {
-		o.logger.Warn("Task exceeded retry limit", "retry_count", retryCount, "task_id", taskID)
-		// Mark task as Failed
-		o.redisClient.HSet(ctx, "taskState", taskID, string(task.Failed))
+		o.markTaskFailed(ctx, taskID, retryCount)
 		return
 	}
 
 	// Mark task as Running
-	o.redisClient.HSet(ctx, "taskState", taskID, string(task.Running))
+	o.markTaskRunning(ctx, taskID)
 
 	// Simulate task execution
 	success := task.DefaultExecute(taskID, o.logger, simulatedExecutionTime)
+
 	if success {
-		o.logger.Info("Task completed successfully", "task_id", taskID)
-		// Mark task as Success and reset retry count
-		o.redisClient.HSet(ctx, "taskState", taskID, string(task.Success))
-		o.redisClient.HDel(ctx, retryKey, taskID)
+		// Task completed successfully
+		o.markTaskSuccess(ctx, taskID)
 	} else {
-		// Increment retry count and retry the task
-		retryCount++
-		o.redisClient.HSet(ctx, retryKey, taskID, retryCount)
+		// Handle task retry
+		o.handleRetry(ctx, taskID, group, retryCount, retryKey)
+	}
+}
 
-		backoff := time.Duration(math.Pow(2, float64(retryCount))) * time.Second
-		o.logger.Warn("Retrying task", "task_id", taskID, "retry_count", retryCount, "backoff", backoff)
-		time.Sleep(backoff)
+func (o *orchestrator) getRetryCount(ctx context.Context, retryKey, taskID string) int {
+	retryCountStr, err := o.redisClient.HGet(ctx, retryKey, taskID).Result()
+	if err == nil {
+		retryCount, _ := strconv.Atoi(retryCountStr)
+		return retryCount
+	} else if !errors.Is(redis.Nil, err) {
+		o.logger.Error("Failed to fetch retry count", "task_id", taskID, "err", err)
+	}
+	return 0
+}
 
-		// Requeue task
+func (o *orchestrator) markTaskFailed(ctx context.Context, taskID string, retryCount int) {
+	o.logger.Warn("Task exceeded retry limit", "retry_count", retryCount, "task_id", taskID)
+	o.redisClient.HSet(ctx, "taskState", taskID, string(task.Failed))
+}
+
+func (o *orchestrator) markTaskRunning(ctx context.Context, taskID string) {
+	o.redisClient.HSet(ctx, "taskState", taskID, string(task.Running))
+}
+
+func (o *orchestrator) markTaskSuccess(ctx context.Context, taskID string) {
+	o.logger.Info("Task completed successfully", "task_id", taskID)
+	o.redisClient.HSet(ctx, "taskState", taskID, string(task.Success))
+	o.redisClient.HDel(ctx, "taskRetries", taskID)
+}
+
+func (o *orchestrator) handleRetry(ctx context.Context, taskID, group string, retryCount int, retryKey string) {
+	// Increment retry count
+	retryCount++
+	o.redisClient.HSet(ctx, retryKey, taskID, retryCount)
+
+	// Calculate backoff duration
+	backoff := time.Duration(math.Pow(2, float64(retryCount))) * time.Second
+	o.logger.Warn("Retrying task", "task_id", taskID, "retry_count", retryCount, "backoff", backoff)
+
+	// Wait for backoff and requeue the task
+	time.AfterFunc(backoff, func() {
 		if group != "" {
+			// Requeue for sequential processing
 			o.redisClient.ZAdd(ctx, "sequential:"+group, redis.Z{
 				Score:  float64(time.Now().UnixNano()),
 				Member: taskID,
 			})
 		} else {
+			// Requeue for concurrent processing
 			o.redisClient.LPush(ctx, taskQueue, taskID)
 		}
 		o.redisClient.HSet(ctx, "taskState", taskID, string(task.Pending))
-	}
+	})
 }

@@ -5,7 +5,7 @@ TEST_CMD=$(GO_CMD) test
 COVERAGE_FILE=coverage.out
 LINT_CMD=golangci-lint run
 
-.PHONY: all test coverage lint clean help
+.PHONY: all test coverage lint clean
 
 # Default target
 all: test coverage

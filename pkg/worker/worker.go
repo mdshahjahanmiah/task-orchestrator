@@ -6,6 +6,7 @@ import (
 	"github.com/mdshahjahanmiah/task-orchestrator/pkg/logger"
 	"github.com/mdshahjahanmiah/task-orchestrator/pkg/redis"
 	"github.com/mdshahjahanmiah/task-orchestrator/pkg/task"
+	"math/rand"
 	"time"
 )
 
@@ -99,11 +100,17 @@ func (w *Worker) executeTask(ctx context.Context, taskID string, duration int) b
 
 	select {
 	case <-time.After(time.Duration(duration) * time.Second): // Simulates task execution
-		// Task finished successfully
-		return time.Now().Unix()%2 == 0 // Random success/failure simulation
+		return w.simulateTaskOutcome(taskID)
 	case <-ctx.Done():
 		// Context canceled, exit early
 		w.logger.Warn("Task execution canceled", "task_id", taskID, "reason", ctx.Err())
 		return false
 	}
+}
+
+func (w *Worker) simulateTaskOutcome(taskID string) bool {
+	successRate := w.config.SuccessRate // Configurable success rate
+	randomValue := rand.Intn(100)       // Random number between 0-99
+	w.logger.Debug("Task execution outcome", "task_id", taskID, "random_value", randomValue, "success_rate", successRate)
+	return randomValue < successRate
 }
