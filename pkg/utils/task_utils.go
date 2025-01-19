@@ -3,14 +3,14 @@ package utils
 import (
 	"context"
 	"fmt"
-	"time"
-
 	"github.com/mdshahjahanmiah/task-orchestrator/pkg/config"
-	"github.com/mdshahjahanmiah/task-orchestrator/pkg/logger"
+	logging "github.com/mdshahjahanmiah/task-orchestrator/pkg/logger"
 	"github.com/mdshahjahanmiah/task-orchestrator/pkg/orchestrator"
 	"github.com/mdshahjahanmiah/task-orchestrator/pkg/redis"
 	"github.com/mdshahjahanmiah/task-orchestrator/pkg/task"
 	"github.com/mdshahjahanmiah/task-orchestrator/pkg/worker"
+	"log"
+	"time"
 )
 
 // SubmitTestTasks submits sample tasks to the orchestrator.
@@ -48,5 +48,14 @@ func StartWorkers(ctx context.Context, redisClient *redis.Client, config *config
 		w := worker.NewWorker(workerID, redisClient, config, logger, 10*time.Second)
 		go w.Start(ctx)
 		logger.Info("Started worker", "worker_id", workerID)
+	}
+}
+
+func ClearRedisKeys(redisClient *redis.Client, keys ...string) {
+	_, err := redisClient.Del(context.Background(), keys...).Result()
+	if err != nil {
+		log.Printf("Failed to clear Redis keys: %v\n", err)
+	} else {
+		log.Println("Redis keys cleared:", keys)
 	}
 }

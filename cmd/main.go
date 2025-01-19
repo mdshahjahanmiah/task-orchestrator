@@ -37,6 +37,10 @@ func main() {
 		logger.Fatal("Failed to initialize orchestrator")
 	}
 
+	// Clear Redis keys for a clean state
+	utils.ClearRedisKeys(redisClient, "taskState", "taskRetries")
+	logger.Info("Redis keys cleared")
+
 	// Submit 10 tasks
 	utils.SubmitTestTasks(orchestrator, logger)
 
@@ -58,7 +62,7 @@ func main() {
 	go orchestrator.MonitorWorkers(ctx)
 
 	// Start workers
-	utils.StartWorkers(ctx, redisClient, &conf, logger, conf.WorkerCount)
+	utils.StartWorkers(ctx, redisClient, &conf, logger, conf.WorkerCount) // Start 3 workers
 
 	<-ctx.Done()
 	if err := redisClient.Close(); err != nil {

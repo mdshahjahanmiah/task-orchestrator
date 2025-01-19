@@ -62,13 +62,17 @@ func (o *orchestrator) AddTask(ctx context.Context, t task.Task) {
 
 // HandleTasks is the main entry point for processing tasks. It delegates to concurrent and sequential processing functions.
 func (o *orchestrator) HandleTasks(ctx context.Context) {
+	o.logger.Debug("Starting to handle tasks...")
 	for {
 		select {
 		case <-ctx.Done():
 			o.logger.Info("Stopping task processing due to context cancellation")
 			return
 		default:
+			o.logger.Debug("Fetching concurrent tasks...")
 			o.processConcurrentTasks(ctx)
+
+			o.logger.Debug("Fetching sequential tasks...")
 			o.processSequentialTasks(ctx)
 		}
 	}
