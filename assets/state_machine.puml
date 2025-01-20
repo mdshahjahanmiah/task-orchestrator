@@ -1,0 +1,14 @@
+@startuml
+[*] --> Pending
+
+Pending --> Running : Task Assigned to Worker
+Running --> Failed : Task Failed
+Running --> Success : Task Completed
+
+Failed --> Retry : Retry Task
+Retry --> Running : Task Retried
+Retry --> [*] : Max Retries Reached
+
+Success --> [*] : Task Completed Successfully
+
+@enduml

@@ -1,0 +1,47 @@
+@startuml
+|User|
+start
+:Submit Task;
+
+|Task Orchestrator|
+:Store Task with Initial State (Pending);
+
+|Task Orchestrator|
+if (Sequential Task?) then (yes)
+  :Assign Task to Worker (One at a time);
+else (no)
+  :Assign Tasks to Workers (Parallel);
+endif
+
+|Worker|
+:Task Received;
+:Mark Task as Running;
+
+|Task Orchestrator|
+if (Task Failed?) then (yes)
+  :Update Task State to Failed;
+  :Increment Retry Count;
+  |Worker|
+  :Retry Task (if Retry Count < Max);
+  if (Max Retries Reached?) then (yes)
+    :Task Failed Permanently;
+    :Log Task Failure;
+  else (no)
+    :Wait for Retry Backoff;
+  endif
+else (no)
+  :Update Task State to Success;
+  :Log Task Success;
+endif
+
+|Task Orchestrator|
+if (Worker Unresponsive?) then (yes)
+  :Reassign Tasks from Unresponsive Worker;
+  :Update Tasks to Pending;
+  :Log Worker Reassignment;
+else (no)
+  :Continue Task Processing;
+endif
+
+stop
+@enduml

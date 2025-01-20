@@ -9,12 +9,11 @@ import (
 	"github.com/mdshahjahanmiah/task-orchestrator/pkg/redis"
 	"github.com/mdshahjahanmiah/task-orchestrator/pkg/task"
 	"github.com/mdshahjahanmiah/task-orchestrator/pkg/worker"
-	"log"
 	"time"
 )
 
 // SubmitTestTasks submits sample tasks to the orchestrator.
-func SubmitTestTasks(orchestrator orchestrator.Orchestrator, logger *logging.Logger) {
+func SubmitTestTasks(orchestrator orchestrator.Orchestrator, config *config.Config, logger *logging.Logger) {
 	ctx := context.Background()
 
 	for i := 1; i <= 10; i++ {
@@ -32,7 +31,7 @@ func SubmitTestTasks(orchestrator orchestrator.Orchestrator, logger *logging.Log
 			Group:         group,
 			Payload: task.Payload{
 				Data:     fmt.Sprintf("Task Data %d", i),
-				Duration: 2,
+				Duration: config.SimulatedExecutionTime,
 			},
 		}
 
@@ -47,15 +46,16 @@ func StartWorkers(ctx context.Context, redisClient *redis.Client, config *config
 		workerID := fmt.Sprintf("worker-%d", i)
 		w := worker.NewWorker(workerID, redisClient, config, logger, 10*time.Second)
 		go w.Start(ctx)
-		logger.Info("Started worker", "worker_id", workerID)
+		logger.Debug("Started worker", "worker_id", workerID)
 	}
 }
 
-func ClearRedisKeys(redisClient *redis.Client, keys ...string) {
+// ClearRedisKeys deletes the specified keys from Redis.
+func ClearRedisKeys(logger *logging.Logger, redisClient *redis.Client, keys ...string) {
 	_, err := redisClient.Del(context.Background(), keys...).Result()
 	if err != nil {
-		log.Printf("Failed to clear Redis keys: %v\n", err)
+		logger.Error("Failed to clear Redis keys", "err", err)
 	} else {
-		log.Println("Redis keys cleared:", keys)
+		logger.Info("Redis keys cleared", "keys", keys)
 	}
 }
