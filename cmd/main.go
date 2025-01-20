@@ -38,8 +38,7 @@ func main() {
 	}
 
 	// Clear Redis keys for a clean state
-	utils.ClearRedisKeys(redisClient, "taskState", "taskRetries")
-	logger.Info("Redis keys cleared")
+	utils.ClearRedisKeys(logger, redisClient, "taskState", "taskRetries")
 
 	// Submit 10 tasks
 	utils.SubmitTestTasks(orchestrator, logger)

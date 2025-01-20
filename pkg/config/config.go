@@ -21,7 +21,7 @@ func Load() (Config, error) {
 	executionMode := fs.String("execution.mode", "sequential", "execution mode e.g., sequential, otherwise default will be concurrent")
 	simulatedExecutionTime := fs.Int("simulated.execution.time", 3, "simulated execution time for task")
 	redisAddress := fs.String("redis.address", "localhost:6379", "Redis address")
-	workerCount := fs.Int("worker.count", 1, "number of workers")
+	workerCount := fs.Int("worker.count", 5, "number of workers")
 	successRate := fs.Int("success.rate", 80, "success rate of task completion")
 	retryLimit := fs.Int("retry.limit", 3, "retry limit for task completion")
 

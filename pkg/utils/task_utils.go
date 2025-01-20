@@ -9,7 +9,6 @@ import (
 	"github.com/mdshahjahanmiah/task-orchestrator/pkg/redis"
 	"github.com/mdshahjahanmiah/task-orchestrator/pkg/task"
 	"github.com/mdshahjahanmiah/task-orchestrator/pkg/worker"
-	"log"
 	"time"
 )
 
@@ -51,11 +50,11 @@ func StartWorkers(ctx context.Context, redisClient *redis.Client, config *config
 	}
 }
 
-func ClearRedisKeys(redisClient *redis.Client, keys ...string) {
+func ClearRedisKeys(logger *logging.Logger, redisClient *redis.Client, keys ...string) {
 	_, err := redisClient.Del(context.Background(), keys...).Result()
 	if err != nil {
-		log.Printf("Failed to clear Redis keys: %v\n", err)
+		logger.Error("Failed to clear Redis keys", "err", err)
 	} else {
-		log.Println("Redis keys cleared:", keys)
+		logger.Info("Redis keys cleared", "keys", keys)
 	}
 }
