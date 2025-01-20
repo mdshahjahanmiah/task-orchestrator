@@ -41,7 +41,7 @@ func main() {
 	utils.ClearRedisKeys(logger, redisClient, "taskState", "taskRetries")
 
 	// Submit 10 tasks
-	utils.SubmitTestTasks(orchestrator, logger)
+	utils.SubmitTestTasks(orchestrator, &conf, logger)
 
 	// Setup context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())

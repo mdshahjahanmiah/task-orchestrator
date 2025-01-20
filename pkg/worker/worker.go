@@ -18,7 +18,6 @@ type Worker struct {
 	logger       *logging.Logger
 }
 
-// NewWorker initializes a new worker with a unique ID.
 func NewWorker(id string, redisClient *redis.Client, config *config.Config, logger *logging.Logger, heartbeatTTL time.Duration) *Worker {
 	return &Worker{
 		ID:           id,
@@ -29,6 +28,8 @@ func NewWorker(id string, redisClient *redis.Client, config *config.Config, logg
 	}
 }
 
+// Start initializes the worker, begins sending periodic heartbeats, and continuously
+// processes tasks from the queue until the context is canceled.
 func (w *Worker) Start(ctx context.Context) {
 	w.logger.Info("Worker started", "worker_id", w.ID)
 	go w.sendHeartbeat(ctx)
@@ -74,6 +75,8 @@ func (w *Worker) Start(ctx context.Context) {
 	}
 }
 
+// sendHeartbeat periodically updates the worker's status in Redis to indicate
+// it is active. The heartbeat stops when the context is canceled.
 func (w *Worker) sendHeartbeat(ctx context.Context) {
 	ticker := time.NewTicker(w.heartbeatTTL / 2) // Use half the TTL for regular updates
 	defer ticker.Stop()
@@ -95,6 +98,8 @@ func (w *Worker) sendHeartbeat(ctx context.Context) {
 	}
 }
 
+// executeTask simulates the execution of a task for a specified duration.
+// It returns true if the task succeeds or false if it fails or is canceled.
 func (w *Worker) executeTask(ctx context.Context, taskID string, duration int) bool {
 	w.logger.Info("Executing task", "task_id", taskID, "duration", duration)
 
@@ -108,6 +113,8 @@ func (w *Worker) executeTask(ctx context.Context, taskID string, duration int) b
 	}
 }
 
+// simulateTaskOutcome simulates the outcome of a task execution based on a configurable
+// success rate. Returns true if the task is successful, false otherwise.
 func (w *Worker) simulateTaskOutcome(taskID string) bool {
 	successRate := w.config.SuccessRate // Configurable success rate
 	randomValue := rand.Intn(100)       // Random number between 0-99

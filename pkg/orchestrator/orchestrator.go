@@ -61,7 +61,8 @@ func (o *orchestrator) AddTask(ctx context.Context, t task.Task) {
 	}
 }
 
-// HandleTasks is the main entry point for processing tasks. It delegates to concurrent and sequential processing functions.
+// HandleTasks processes tasks by delegating to concurrent and sequential task handlers.
+// It runs continuously until the context is canceled.
 func (o *orchestrator) HandleTasks(ctx context.Context) {
 	o.logger.Debug("Starting to handle tasks...")
 	for {
@@ -79,6 +80,8 @@ func (o *orchestrator) HandleTasks(ctx context.Context) {
 	}
 }
 
+// MonitorWorkers periodically checks the status of workers and reassigns tasks
+// for unresponsive workers. It runs until the context is canceled.
 func (o *orchestrator) MonitorWorkers(ctx context.Context) {
 	ticker := time.NewTicker(o.heartbeatTTL / 2)
 	defer ticker.Stop()
@@ -105,6 +108,8 @@ func (o *orchestrator) MonitorWorkers(ctx context.Context) {
 	}
 }
 
+// ReassignTasks redistributes tasks from an unresponsive worker back to the task queue
+// and updates their state to pending.
 func (o *orchestrator) ReassignTasks(ctx context.Context, worker string) {
 	tasks, err := o.redisClient.HGetAll(ctx, "workerTasks:"+worker).Result()
 	if err != nil {
@@ -120,6 +125,7 @@ func (o *orchestrator) ReassignTasks(ctx context.Context, worker string) {
 	o.redisClient.Del(ctx, "workerTasks:"+worker)
 }
 
+// addConcurrentTask enqueues a task in the concurrent task queue and updates its state to pending.
 func (o *orchestrator) addConcurrentTask(ctx context.Context, t task.Task) {
 	if err := o.redisClient.LPush(ctx, taskQueue, t.ID).Err(); err != nil {
 		o.logger.Error("Failed to add task to concurrent queue", "task_id", t.ID, "err", err)
@@ -128,6 +134,8 @@ func (o *orchestrator) addConcurrentTask(ctx context.Context, t task.Task) {
 	o.logTaskState(ctx, t, task.Pending)
 }
 
+// addSequentialTask enqueues a task in the sequential task queue,
+// using a timestamp as the score to maintain execution order, and updates its state to pending.
 func (o *orchestrator) addSequentialTask(ctx context.Context, t task.Task) {
 	score := time.Now().UnixNano()
 	if err := o.redisClient.ZAdd(ctx, "sequential:"+t.Group, redis.Z{
@@ -140,12 +148,15 @@ func (o *orchestrator) addSequentialTask(ctx context.Context, t task.Task) {
 	o.logTaskState(ctx, t, task.Pending)
 }
 
+// logTaskState updates the task's metadata in Redis, including its state, group, and execution mode.
 func (o *orchestrator) logTaskState(ctx context.Context, t task.Task, state task.State) {
 	o.redisClient.HSet(ctx, "taskState", t.ID, string(state))
 	o.redisClient.HSet(ctx, "taskGroup", t.ID, t.Group)
 	o.redisClient.HSet(ctx, "taskExecutionMode", t.ID, string(t.ExecutionMode))
 }
 
+// processConcurrentTasks retrieves and processes tasks from the concurrent task queue.
+// Each task is executed asynchronously in a separate goroutine.
 func (o *orchestrator) processConcurrentTasks(ctx context.Context) {
 	result, err := o.redisClient.BRPop(ctx, 0, taskQueue).Result()
 	if err != nil {
@@ -159,6 +170,9 @@ func (o *orchestrator) processConcurrentTasks(ctx context.Context) {
 	go o.executeTask(ctx, taskID, "", o.config.SimulatedExecutionTime)
 }
 
+// processSequentialTasks processes tasks from sequential task groups in order.
+// It acquires a lock for each group to ensure only one task is processed at a time,
+// and releases the lock after processing.
 func (o *orchestrator) processSequentialTasks(ctx context.Context) {
 	groups, err := o.redisClient.Keys(ctx, "sequential:*").Result()
 	if err != nil {
@@ -189,21 +203,28 @@ func (o *orchestrator) processSequentialTasks(ctx context.Context) {
 	}
 }
 
+// acquireGroupLock attempts to acquire a lock for the specified group to ensure
+// exclusive task processing. Returns true if the lock is successfully acquired.
 func (o *orchestrator) acquireGroupLock(ctx context.Context, group string) bool {
 	locked := o.redisClient.SetNX(ctx, "groupLock:"+group, "locked", o.heartbeatTTL).Val()
 	o.logger.Debug("Attempting to acquire group lock", "group", group, "locked", locked)
 	return locked
 }
 
+// releaseGroupLock releases the lock for the specified group, allowing other processes to acquire it.
 func (o *orchestrator) releaseGroupLock(ctx context.Context, group string) {
 	o.redisClient.Del(ctx, "groupLock:"+group)
 }
 
+// executeTask handles the execution of a single task. It manages task retries,
+// updates the task state, and simulates execution. If the retry limit is reached,
+// the task is marked as failed.
 func (o *orchestrator) executeTask(ctx context.Context, taskID, group string, simulatedExecutionTime int) {
 	retryKey := "taskRetries"
 	retryCount := o.getRetryCount(ctx, retryKey, taskID)
 
 	// Check if retry count exceeds the limit
+	//TODO: use retryLimit from task config
 	if retryCount >= retryLimit {
 		o.markTaskFailed(ctx, taskID, retryCount)
 		return
@@ -224,6 +245,8 @@ func (o *orchestrator) executeTask(ctx context.Context, taskID, group string, si
 	}
 }
 
+// getRetryCount retrieves the current retry count for a given task from Redis.
+// If the retry count is unavailable or an error occurs, it defaults to 0.
 func (o *orchestrator) getRetryCount(ctx context.Context, retryKey, taskID string) int {
 	retryCountStr, err := o.redisClient.HGet(ctx, retryKey, taskID).Result()
 	if err == nil {
@@ -235,21 +258,27 @@ func (o *orchestrator) getRetryCount(ctx context.Context, retryKey, taskID strin
 	return 0
 }
 
+// markTaskFailed marks a task as failed in Redis and logs a warning when the retry limit is exceeded.
 func (o *orchestrator) markTaskFailed(ctx context.Context, taskID string, retryCount int) {
 	o.logger.Warn("Task exceeded retry limit", "retry_count", retryCount, "task_id", taskID)
 	o.redisClient.HSet(ctx, "taskState", taskID, string(task.Failed))
 }
 
+// markTaskRunning updates the task's state to running in Redis.
 func (o *orchestrator) markTaskRunning(ctx context.Context, taskID string) {
 	o.redisClient.HSet(ctx, "taskState", taskID, string(task.Running))
 }
 
+// markTaskSuccess updates the task's state to success in Redis,
+// logs the completion, and clears the retry count for the task.
 func (o *orchestrator) markTaskSuccess(ctx context.Context, taskID string) {
 	o.logger.Info("Task completed successfully", "task_id", taskID)
 	o.redisClient.HSet(ctx, "taskState", taskID, string(task.Success))
 	o.redisClient.HDel(ctx, "taskRetries", taskID)
 }
 
+// handleRetry increments the retry count for a task, calculates an exponential backoff,
+// and requeues the task for processing based on its group (sequential or concurrent).
 func (o *orchestrator) handleRetry(ctx context.Context, taskID, group string, retryCount int, retryKey string) {
 	// Increment retry count
 	retryCount++
