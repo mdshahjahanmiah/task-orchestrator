@@ -25,7 +25,7 @@ Ensure the following are installed on your system:
 1. **Docker**: You can download and install Docker from [Docker's official website](https://www.docker.com/products/docker-desktop).
 2. **Docker Compose**: Docker Compose usually comes bundled with Docker Desktop. Verify your installation by running:
 ```sh
-   docker-compose --version
+docker-compose --version
 ```
 
 ## Setup Instructions
@@ -33,34 +33,34 @@ Ensure the following are installed on your system:
 ### Clone the Repository
 
 ```bash
-  git clone https://github.com/mdshahjahanmiah/task-orchestrator.git
+git clone https://github.com/mdshahjahanmiah/task-orchestrator.git
 ```
 After successfully cloning the repository, open the terminal and navigate to the project directory using the command:
 
 ```bash
-  cd task-orchestrator
+cd task-orchestrator
 ```
 ## Run the Application
 ### Start the Orchestrator
 Once you're inside the `task-orchestrator` directory, run the following command in the terminal:
 ```bash 
-  go run cmd/main.go
+go run cmd/main.go
 ```
 
 ### Check Task Status
 Open another tab or window in terminal , and make the `task_status.sh` script executable
 
 ```bash 
-  chmod +x task_status.sh
+chmod +x task_status.sh
 ``` 
 Run the script to check task states
 
 ```bash 
-  ./task_status.sh
+./task_status.sh
 ```
 When the script runs successfully, the output will look like this:
 ```bash 
-  Fetching Task States...
+Fetching Task States...
 task-1: Success
 task-2: Success
 task-3: Success
@@ -89,8 +89,10 @@ Script execution completed.
 ```
 ## Running Tests
 ```bash 
-  make test
+make test
 ```
+## Workflow
+![Alt Text](assets/state-machine.png)
 
 ## Known Issues and Limitations
 - **Sequential Task Blocking**: Sequential tasks in the same group block other tasks in that group until completed.
