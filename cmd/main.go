@@ -38,11 +38,10 @@ func main() {
 	}
 
 	// Clear Redis keys for a clean state
-	utils.ClearRedisKeys(redisClient, "taskState", "taskRetries")
-	logger.Info("Redis keys cleared")
+	utils.ClearRedisKeys(logger, redisClient, "taskState", "taskRetries")
 
 	// Submit 10 tasks
-	utils.SubmitTestTasks(orchestrator, logger)
+	utils.SubmitTestTasks(orchestrator, &conf, logger)
 
 	// Setup context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -62,7 +61,7 @@ func main() {
 	go orchestrator.MonitorWorkers(ctx)
 
 	// Start workers
-	utils.StartWorkers(ctx, redisClient, &conf, logger, conf.WorkerCount) // Start 3 workers
+	utils.StartWorkers(ctx, redisClient, &conf, logger, conf.WorkerCount)
 
 	<-ctx.Done()
 	if err := redisClient.Close(); err != nil {
