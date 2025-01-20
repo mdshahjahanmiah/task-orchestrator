@@ -34,28 +34,31 @@ Ensure the following are installed on your system:
 
 ```bash
   git clone https://github.com/mdshahjahanmiah/task-orchestrator.git
+```
+After successfully cloning the repository, open the terminal and navigate to the project directory using the command:
+
+```bash
   cd task-orchestrator
 ```
-
 ## Run the Application
 ### Start the Orchestrator
-    
+Once you're inside the `task-orchestrator` directory, run the following command in the terminal:
 ```bash 
   go run cmd/main.go
 ```
+
 ### Check Task Status
-#### Make the task_status.sh script executable
+Open another tab or window in terminal , and make the `task_status.sh` script executable
 
 ```bash 
   chmod +x task_status.sh
-```
-#### Run the script to check task states
+``` 
+Run the script to check task states
 
 ```bash 
   ./task_status.sh
 ```
-### Successful Script Execution
-#### When the script runs successfully, the output will look like this:
+When the script runs successfully, the output will look like this:
 ```bash 
   Fetching Task States...
 task-1: Success
@@ -89,13 +92,14 @@ Script execution completed.
   make test
 ```
 
-### Known Issues and Limitations
+## Known Issues and Limitations
 - **Sequential Task Blocking**: Sequential tasks in the same group block other tasks in that group until completed.
 - **Potential for Optimization**: `main.go` can be optimized using `sync.WaitGroup` to manage goroutines efficiently.
 - **Task Submission Flexibility**: Tasks are currently submitted on application start. Running the orchestrator standalone and enabling task submission via CLI or external requests would provide greater flexibility.
 - **Environment-Based Configuration**: Configuration is not read from environment variables. Enhancing this to support environment variables or external files is recommended for production-ready deployment.
 - **Combined Configuration Structure** The current configuration structure combines orchestrator and worker settings in the same struct. Separating them into distinct configurations would improve scalability and maintainability.
 - **Logging**: Logging provides minimal information. Enhancing logging to include detailed context and diagnostics would improve debugging and monitoring.
+- **Enhanced Testing** Use `Godog` to define behavior-driven scenarios to validate the robustness of debugging and monitoring features.
 
 ## License
 This project is licensed under the MIT License. See the `LICENSE` file for details.

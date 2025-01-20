@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/mdshahjahanmiah/task-orchestrator/pkg/config"
 	"github.com/mdshahjahanmiah/task-orchestrator/pkg/logger"
 	redisClient "github.com/mdshahjahanmiah/task-orchestrator/pkg/redis"
@@ -20,7 +21,7 @@ const (
 )
 
 type Orchestrator interface {
-	AddTask(ctx context.Context, t task.Task)
+	AddTask(ctx context.Context, t task.Task) error
 	HandleTasks(ctx context.Context)
 	MonitorWorkers(ctx context.Context)
 	ReassignTasks(ctx context.Context, worker string)
@@ -45,10 +46,10 @@ func NewOrchestrator(config config.Config, redisClient *redisClient.Client, logg
 }
 
 // AddTask adds a task to the appropriate queue based on its execution mode.
-func (o *orchestrator) AddTask(ctx context.Context, t task.Task) {
+func (o *orchestrator) AddTask(ctx context.Context, t task.Task) error {
 	if err := t.Validate(); err != nil {
 		o.logger.Error("Invalid task", "err", err)
-		return
+		return err
 	}
 
 	switch t.ExecutionMode {
@@ -57,8 +58,11 @@ func (o *orchestrator) AddTask(ctx context.Context, t task.Task) {
 	case string(task.Concurrent):
 		o.addConcurrentTask(ctx, t)
 	default:
+		err := fmt.Errorf("invalid execution mode: %s", t.ExecutionMode)
 		o.logger.Error("Invalid execution mode", "execution_mode", t.ExecutionMode, "task_id", t.ID)
+		return err
 	}
+	return nil
 }
 
 // HandleTasks processes tasks by delegating to concurrent and sequential task handlers.
@@ -136,16 +140,18 @@ func (o *orchestrator) addConcurrentTask(ctx context.Context, t task.Task) {
 
 // addSequentialTask enqueues a task in the sequential task queue,
 // using a timestamp as the score to maintain execution order, and updates its state to pending.
-func (o *orchestrator) addSequentialTask(ctx context.Context, t task.Task) {
+func (o *orchestrator) addSequentialTask(ctx context.Context, t task.Task) error {
 	score := time.Now().UnixNano()
 	if err := o.redisClient.ZAdd(ctx, "sequential:"+t.Group, redis.Z{
 		Score:  float64(score),
 		Member: t.ID,
 	}).Err(); err != nil {
 		o.logger.Error("Failed to add task to sequential queue", "task_id", t.ID, "err", err)
-		return
+		return err
 	}
 	o.logTaskState(ctx, t, task.Pending)
+
+	return nil
 }
 
 // logTaskState updates the task's metadata in Redis, including its state, group, and execution mode.
